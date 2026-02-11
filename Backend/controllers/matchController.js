@@ -9,11 +9,46 @@ export const startSearching = async (req, res) => {
   try {
     const userId = req.user._id;
 
-    // If already in a call, reject
-    if (req.user.isInCall) {
-      return res.status(400).json({
+    // Fetch fresh user state from DB to avoid stale flags
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
         success: false,
-        message: 'You are already in a call.',
+        message: 'User not found.',
+      });
+    }
+
+    // If user is marked as "in call", aggressively clean up any stale room state
+    // instead of blocking with a 400, so the user can always start a fresh match.
+    if (user.isInCall) {
+      if (user.currentRoomId) {
+        const room = await Room.findOne({ roomId: user.currentRoomId });
+
+        if (room && room.status === 'active') {
+          // End the room and clean up the OTHER participant as well
+          room.endRoom();
+          await room.save();
+
+          const partnerParticipant = room.participants.find(
+            (p) => p.userId.toString() !== user._id.toString()
+          );
+
+          if (partnerParticipant) {
+            await User.findByIdAndUpdate(partnerParticipant.userId, {
+              isInCall: false,
+              isSearching: false,
+              currentRoomId: null,
+            });
+          }
+        }
+      }
+
+      // In all cases, reset current user so they can start a new search
+      await User.findByIdAndUpdate(user._id, {
+        isSearching: false,
+        isInCall: false,
+        currentRoomId: null,
       });
     }
 
@@ -30,7 +65,7 @@ export const startSearching = async (req, res) => {
 
       // Generate LiveKit tokens for both users (video + audio enabled)
       const [tokenA, tokenB] = await Promise.all([
-        generateLiveKitToken(roomId, req.user.username),
+        generateLiveKitToken(roomId, user.username),
         generateLiveKitToken(roomId, partner.username),
       ]);
 
@@ -38,7 +73,7 @@ export const startSearching = async (req, res) => {
       const room = await Room.create({
         roomId,
         participants: [
-          { userId: userId, username: req.user.username },
+          { userId: userId, username: user.username },
           { userId: partner._id, username: partner.username },
         ],
         status: 'active',
