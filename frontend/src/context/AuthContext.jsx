@@ -4,7 +4,9 @@ import axios from 'axios';
 const AuthContext = createContext(null);
 
 const api = axios.create({
-  baseURL: '/api',
+  // Deploy: set VITE_API_BASE_URL=https://hellotalk-t24v.onrender.com/api
+  // Dev (with proxy): this falls back to '/api'
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
 });
 
 export const AuthProvider = ({ children }) => {
